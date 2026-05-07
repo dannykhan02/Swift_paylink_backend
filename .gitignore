@@ -1,0 +1,57 @@
+# Bytecode and cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environment (if not using a global one)
+.venv/
+.env
+env
+
+# Configuration and secret files (DO NOT expose credentials)
+client_secrets.json
+
+# Dependency files (if using Pipenv)
+Pipfile.lock
+
+# Flask session and instance files
+flask_session/
+instance
+generate_secret_key.py
+
+
+# Log files
+*.log
+
+# OAuth and authentication config
+
+.qodo
+# Bytecode and cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environment (if not using a global one)
+venv/
+.env
+env
+
+# Configuration and secret files (DO NOT expose credentials)
+client_secrets.json
+
+# Dependency files (if using Pipenv)
+Pipfile.lock
+
+# Flask session and instance files
+flask_session/
+instance
+
+
+# Log files
+*.log
+
+# OAuth and authentication config
+
+.qodo
