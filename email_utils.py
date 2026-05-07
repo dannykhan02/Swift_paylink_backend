@@ -14,6 +14,11 @@ from email.mime.multipart import MIMEMultipart
 from config import Config
 from models import db, EmailLog, EmailStatus
 
+# How long (seconds) to wait for the SMTP connection before giving up.
+# Must be well under Gunicorn's worker timeout (default 30 s) so a
+# blocked port fails fast instead of hanging the worker to death.
+SMTP_TIMEOUT = 10
+
 
 def send_email(to_email: str, order_id: str, amount: str, currency: str) -> str:
     """
@@ -38,7 +43,9 @@ def send_email(to_email: str, order_id: str, amount: str, currency: str) -> str:
     status                = EmailStatus.SENT
 
     try:
-        with smtplib.SMTP("smtp.gmail.com", 587) as server:
+        # Pass timeout= here — without it, socket.connect() can block
+        # indefinitely when port 587 is firewalled, killing the Gunicorn worker.
+        with smtplib.SMTP("smtp.gmail.com", 587, timeout=SMTP_TIMEOUT) as server:
             server.starttls()
             server.login(Config.SMTP_EMAIL, Config.SMTP_PASSWORD)
             server.send_message(msg)
