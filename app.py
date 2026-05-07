@@ -221,8 +221,9 @@ def initialize_app(app: Flask) -> bool:
                 if not test_database_connection(app):
                     raise Exception("DB connection failed")
                 print("✅ Database connected")
-                # db.create_all()   # ❌ Commented out for production – use flask db upgrade instead
-                print("✅ Tables verified (migrations assumed applied)")
+                # Create all tables (safe if they already exist)
+                db.create_all()
+                print("✅ Tables created/verified")
                 print("🎉 Initialization complete!")
                 return True
         except Exception as e:
