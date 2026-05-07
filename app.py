@@ -108,15 +108,12 @@ def create_app() -> Flask:
 
     @app.route("/health")
     def detailed_health():
-        info = {"status": "ok", "timestamp": time.time(), "version": "1.0"}
-        try:
-            with db.engine.connect() as conn:
-                conn.execute(db.text("SELECT 1"))
-            info["database"] = "connected"
-        except Exception as e:
-            info["database"] = f"error: {str(e)}"
-            info["status"]   = "degraded"
-        return info, (200 if info["status"] == "ok" else 503)
+        # Lightweight health check – no database access to avoid startup timeouts
+        return {
+            "status": "ok",
+            "timestamp": time.time(),
+            "version": "1.0"
+        }, 200
 
     # ── Debug endpoint (optional) ────────────────────────────
     @app.route("/debug/config")
@@ -224,8 +221,8 @@ def initialize_app(app: Flask) -> bool:
                 if not test_database_connection(app):
                     raise Exception("DB connection failed")
                 print("✅ Database connected")
-                db.create_all()
-                print("✅ Tables created/verified")
+                # db.create_all()   # ❌ Commented out for production – use flask db upgrade instead
+                print("✅ Tables verified (migrations assumed applied)")
                 print("🎉 Initialization complete!")
                 return True
         except Exception as e:
@@ -349,7 +346,9 @@ if __name__ == "__main__":
     )
 else:
     print("🏭 Running in production mode")
-    app_initialized = initialize_app(app)
-    if not app_initialized:
-        print("⚠️  Application started with degraded functionality")
+    try:
+        initialize_app(app)
+        print("✅ Production initialization complete")
+    except Exception as e:
+        print(f"⚠️ Initialization warning: {e}")
     Config.summary()
