@@ -2,25 +2,6 @@
 app.py
 ─────────────────────────────────────────────────────────────
 Main Flask application entry point.
-
-All environment-variable handling lives in config.py.
-This file is responsible only for wiring Flask together.
-
-Environment variables (set in .env)
-------------------------------------
-  PAYPAL_CLIENT_ID
-  PAYPAL_CLIENT_SECRET
-  PAYPAL_SANDBOX        = true | false
-  FRONTEND_URL          = http://localhost:5173
-  RETURN_URL            = http://localhost:5000/success
-  CANCEL_URL            = http://localhost:5000/cancel
-  SMTP_EMAIL
-  SMTP_PASSWORD
-  DATABASE_URL          = postgresql://... or sqlite:///payments.db
-  EXTERNAL_DATABASE_URL = postgresql://...  (preferred for production)
-  INTERNAL_DATABASE_URL = postgresql://...  (fallback)
-  SECRET_KEY
-  PORT                  = 5000
 """
 
 import sys
@@ -31,18 +12,12 @@ from flask_cors import CORS
 from flask_restful import Api
 import requests as http
 
-# Config is resolved at import time — bad env vars exit here.
 from config import Config
 from models import db, migrate
 from resources import register_resources
-
-# ── NEW: import the proper admin resources module ─────────────────────────────
 from admin_resources import register_admin_resources
-
 from paypal import get_access_token, capture_paypal_order
 from email_utils import send_email
-
-# Import auth blueprint and JWT manager
 from auth import auth_bp, jwt
 
 
@@ -53,21 +28,24 @@ from auth import auth_bp, jwt
 def create_app() -> Flask:
     app = Flask(__name__)
 
-    # ── Flask / SQLAlchemy config (sourced from Config) ──────
+    # ── Flask / SQLAlchemy config ────────────────────────────
     app.config["SECRET_KEY"]                     = Config.SECRET_KEY
     app.config["SQLALCHEMY_DATABASE_URI"]        = Config.SQLALCHEMY_DATABASE_URI
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = Config.SQLALCHEMY_TRACK_MODIFICATIONS
     app.config["SQLALCHEMY_ENGINE_OPTIONS"]      = Config.SQLALCHEMY_ENGINE_OPTIONS
 
-    # ── JWT configuration ──────────────────────────────────
-    app.config["JWT_SECRET_KEY"] = Config.JWT_SECRET_KEY
-    app.config["JWT_ACCESS_TOKEN_EXPIRES"] = Config.JWT_ACCESS_TOKEN_EXPIRES
+    # ── JWT ──────────────────────────────────────────────────
+    app.config["JWT_SECRET_KEY"]              = Config.JWT_SECRET_KEY
+    app.config["JWT_ACCESS_TOKEN_EXPIRES"]    = Config.JWT_ACCESS_TOKEN_EXPIRES
     jwt.init_app(app)
 
     db.init_app(app)
     migrate.init_app(app, db)
 
-    # ── CORS (allow requests from frontend) ──────────────────
+    # ── CORS ─────────────────────────────────────────────────
+    # Config.CORS_ORIGINS is built from CORS_ORIGINS env var + FRONTEND_URL.
+    # In production (Railway sets RAILWAY_ENVIRONMENT) localhost origins
+    # are NOT added — only what's explicitly in the .env is allowed.
     CORS(
         app,
         origins=Config.CORS_ORIGINS,
@@ -77,26 +55,22 @@ def create_app() -> Flask:
         allow_headers=["Content-Type", "Authorization"],
     )
 
-    # ── Public API (no /admin prefix) ────────────────────────
+    # ── Public API ────────────────────────────────────────────
     public_api = Api(app, prefix="/api")
-    register_resources(public_api)   # registers /pay, /health, /invoice/generate, etc.
+    register_resources(public_api)
 
     # ── Admin API ─────────────────────────────────────────────
-    # IMPORTANT: uses a SEPARATE Api instance with /api prefix so that
-    # admin routes live at /api/admin/...
-    # register_admin_resources() handles the correct ordering of static
-    # routes (bulk, export) before the dynamic <order_id> route.
     admin_api = Api(app, prefix="/api")
     register_admin_resources(admin_api)
 
-    # ── Register auth blueprint (already under /api/auth) ─────
+    # ── Auth blueprint ────────────────────────────────────────
     app.register_blueprint(auth_bp, url_prefix="/api/auth")
 
-    # ── PayPal redirect routes (not RESTful — PayPal calls these)
+    # ── PayPal redirect routes ────────────────────────────────
     app.add_url_rule("/success", "success", success_handler)
     app.add_url_rule("/cancel",  "cancel",  cancel_handler)
 
-    # ── Health endpoints (public) ────────────────────────────
+    # ── Health endpoints ─────────────────────────────────────
     @app.route("/")
     def root_health():
         return {
@@ -108,14 +82,13 @@ def create_app() -> Flask:
 
     @app.route("/health")
     def detailed_health():
-        # Lightweight health check – no database access to avoid startup timeouts
         return {
-            "status": "ok",
+            "status":    "ok",
             "timestamp": time.time(),
-            "version": "1.0"
+            "version":   "1.0",
         }, 200
 
-    # ── Debug endpoint (optional) ────────────────────────────
+    # ── Debug endpoints ───────────────────────────────────────
     @app.route("/debug/config")
     def debug_config():
         client_id = Config.PAYPAL_CLIENT_ID
@@ -127,18 +100,19 @@ def create_app() -> Flask:
             return value[:length] + "..." if len(value) > length else value
 
         payload = {
-            "client_id_set":     bool(client_id),
-            "client_id_preview": preview(client_id),
-            "secret_set":        bool(secret),
-            "secret_preview":    preview(secret),
-            "is_sandbox": Config.IS_SANDBOX,
-            "base_url":   Config.PAYPAL_BASE_URL,
-            "frontend_url": Config.FRONTEND_URL,
-            "return_url":   Config.RETURN_URL,
-            "cancel_url":   Config.CANCEL_URL,
-            "smtp_email_set": bool(Config.SMTP_EMAIL),
+            "client_id_set":         bool(client_id),
+            "client_id_preview":     preview(client_id),
+            "secret_set":            bool(secret),
+            "secret_preview":        preview(secret),
+            "is_sandbox":            Config.IS_SANDBOX,
+            "base_url":              Config.PAYPAL_BASE_URL,
+            "frontend_url":          Config.FRONTEND_URL,
+            "return_url":            Config.RETURN_URL,
+            "cancel_url":            Config.CANCEL_URL,
+            "smtp_email_set":        bool(Config.SMTP_EMAIL),
             "secret_key_is_default": (Config.SECRET_KEY == "dev-secret-change-in-production"),
-            "database_url_preview": Config.masked_db_url(),
+            "database_url_preview":  Config.masked_db_url(),
+            "cors_origins":          Config.CORS_ORIGINS,   # ← added for easier debugging
         }
         payload["all_credentials_set"] = all([
             payload["client_id_set"],
@@ -147,7 +121,6 @@ def create_app() -> Flask:
         ])
         return jsonify(payload), 200
 
-    # ── Debug: list all registered routes (dev only) ─────────
     @app.route("/debug/routes")
     def debug_routes():
         routes = []
@@ -170,16 +143,16 @@ def create_app() -> Flask:
             "error":  "Resource not found",
             "status": 404,
             "endpoints": {
-                "pay":             "/api/pay",
-                "payments":        "/api/admin/payments",
-                "payments_bulk":   "/api/admin/payments/bulk",
-                "payments_export": "/api/admin/payments/export",
-                "health":          "/api/health",
-                "dashboard":       "/api/admin/dashboard",
+                "pay":              "/api/pay",
+                "payments":         "/api/admin/payments",
+                "payments_bulk":    "/api/admin/payments/bulk",
+                "payments_export":  "/api/admin/payments/export",
+                "health":           "/api/health",
+                "dashboard":        "/api/admin/dashboard",
                 "invoice_generate": "/api/invoice/generate",
                 "invoice_records":  "/api/admin/invoices",
-                "debug_config":    "/debug/config",
-                "debug_routes":    "/debug/routes",
+                "debug_config":     "/debug/config",
+                "debug_routes":     "/debug/routes",
             },
         }, 404
 
@@ -191,7 +164,7 @@ def create_app() -> Flask:
 
 
 # ══════════════════════════════════════════════════════════════
-#  DATABASE HELPERS (unchanged)
+#  DATABASE HELPERS
 # ══════════════════════════════════════════════════════════════
 
 def test_database_connection(app: Flask, max_retries: int = 3, retry_delay: int = 2) -> bool:
@@ -221,7 +194,6 @@ def initialize_app(app: Flask) -> bool:
                 if not test_database_connection(app):
                     raise Exception("DB connection failed")
                 print("✅ Database connected")
-                # Create all tables (safe if they already exist)
                 db.create_all()
                 print("✅ Tables created/verified")
                 print("🎉 Initialization complete!")
@@ -237,7 +209,7 @@ def initialize_app(app: Flask) -> bool:
 
 
 # ══════════════════════════════════════════════════════════════
-#  PAYPAL REDIRECT HANDLERS (unchanged)
+#  PAYPAL REDIRECT HANDLERS
 # ══════════════════════════════════════════════════════════════
 
 def success_handler():
@@ -261,12 +233,12 @@ def success_handler():
         payer_email = payer.get("email_address", "")
         payer_id    = payer.get("payer_id", "")
 
-        units       = captured.get("purchase_units", [{}])
-        unit        = units[0] if units else {}
-        captures    = unit.get("payments", {}).get("captures", [{}])
-        capture     = captures[0] if captures else {}
-        amount_obj  = capture.get("amount", {})
-        capture_id  = capture.get("id", "")
+        units      = captured.get("purchase_units", [{}])
+        unit       = units[0] if units else {}
+        captures   = unit.get("payments", {}).get("captures", [{}])
+        capture    = captures[0] if captures else {}
+        amount_obj = capture.get("amount", {})
+        capture_id = capture.get("id", "")
         description = unit.get("description", "")
 
         session        = CheckoutSession.query.filter_by(order_id=order_id).first()
