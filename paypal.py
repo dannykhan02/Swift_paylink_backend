@@ -29,7 +29,11 @@ def get_access_token() -> str:
         data="grant_type=client_credentials",
         timeout=15,
     )
-    res.raise_for_status()
+
+    if not res.ok:
+        print(f"[PayPal] get_access_token failed {res.status_code}: {res.text}")
+        res.raise_for_status()
+
     return res.json()["access_token"]
 
 
@@ -59,7 +63,7 @@ def create_paypal_order(
             "paypal": {
                 "experience_context": {
                     "payment_method_preference": "IMMEDIATE_PAYMENT_REQUIRED",
-                    "brand_name":   "PayPal Invoice",
+                    "brand_name":   "Swift Pay Link",
                     "locale":       "en-US",
                     "landing_page": landing_page,
                     "user_action":  "PAY_NOW",
@@ -70,6 +74,8 @@ def create_paypal_order(
         },
     }
 
+    print(f"[PayPal] Creating order — amount: {amount} {currency}, mode: {'sandbox' if Config.IS_SANDBOX else 'live'}")
+
     res = http.post(
         f"{Config.PAYPAL_BASE_URL}/v2/checkout/orders",
         headers={
@@ -79,8 +85,14 @@ def create_paypal_order(
         json=payload,
         timeout=15,
     )
-    res.raise_for_status()
-    return res.json()
+
+    if not res.ok:
+        print(f"[PayPal] create_paypal_order failed {res.status_code}: {res.text}")
+        res.raise_for_status()
+
+    order = res.json()
+    print(f"[PayPal] Order created: {order.get('id')} status={order.get('status')}")
+    return order
 
 
 def get_order_status(token: str, order_id: str) -> str:
@@ -94,8 +106,14 @@ def get_order_status(token: str, order_id: str) -> str:
         headers={"Authorization": f"Bearer {token}"},
         timeout=15,
     )
-    res.raise_for_status()
-    return res.json().get("status", "UNKNOWN")
+
+    if not res.ok:
+        print(f"[PayPal] get_order_status failed {res.status_code}: {res.text}")
+        res.raise_for_status()
+
+    status = res.json().get("status", "UNKNOWN")
+    print(f"[PayPal] Order {order_id} status: {status}")
+    return status
 
 
 def capture_paypal_order(token: str, order_id: str) -> dict:
@@ -114,8 +132,6 @@ def capture_paypal_order(token: str, order_id: str) -> dict:
     status = get_order_status(token, order_id)
 
     if status == "COMPLETED":
-        # Already captured (e.g. worker retry after a timeout).
-        # Return a minimal dict so the caller can continue normally.
         print(f"[PayPal] Order {order_id} already COMPLETED — skipping capture.")
         return {"status": "COMPLETED", "id": order_id, "_already_captured": True}
 
@@ -124,18 +140,23 @@ def capture_paypal_order(token: str, order_id: str) -> dict:
             f"[PayPal] Cannot capture order {order_id}: status is '{status}' (expected APPROVED)"
         )
 
-    # A stable idempotency key tied to this order means retrying the same
-    # request never creates a second charge.
     idempotency_key = str(uuid.uuid5(uuid.NAMESPACE_URL, f"capture:{order_id}"))
+    print(f"[PayPal] Capturing order {order_id} with idempotency key {idempotency_key}")
 
     res = http.post(
         f"{Config.PAYPAL_BASE_URL}/v2/checkout/orders/{order_id}/capture",
         headers={
-            "Authorization":    f"Bearer {token}",
-            "Content-Type":     "application/json",
+            "Authorization":     f"Bearer {token}",
+            "Content-Type":      "application/json",
             "PayPal-Request-Id": idempotency_key,
         },
         timeout=15,
     )
-    res.raise_for_status()
-    return res.json()
+
+    if not res.ok:
+        print(f"[PayPal] capture_paypal_order failed {res.status_code}: {res.text}")
+        res.raise_for_status()
+
+    result = res.json()
+    print(f"[PayPal] Capture result: {result.get('status')} for order {order_id}")
+    return result
